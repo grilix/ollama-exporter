@@ -5,9 +5,12 @@ WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 
-COPY . .
+COPY cmd/ cmd
 
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o ollama-exporter ./cmd/ollama-exporter
+RUN CGO_ENABLED=0 GOOS=linux \
+      go build -a -installsuffix cgo \
+      -o ollama-exporter \
+      ./cmd/ollama-exporter
 
 FROM alpine:latest
 
@@ -18,6 +21,8 @@ EXPOSE 8000
 WORKDIR /home/user
 
 COPY --from=builder /app/ollama-exporter .
+
+COPY README.md LICENSE .
 
 RUN chown user:user ollama-exporter
 
