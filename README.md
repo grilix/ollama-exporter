@@ -25,7 +25,7 @@ go build -o ollama-exporter ./cmd/ollama-exporter
 ### From docker
 
 ```
-docker run -e OLLAMA_HOST=ollama-server:11434 <tbd>
+docker run --rm -p 8000:8000 -e OLLAMA_HOST ghcr.io/grilix/ollama-exporter:latest
 ```
 
 ## Configuration
