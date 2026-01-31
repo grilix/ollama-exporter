@@ -174,7 +174,7 @@ func verifyOllamaConnection() error {
 	return fmt.Errorf("got unexpected response from %s/api/version", ollamaUrlBase)
 }
 
-// makeProxyHandler creates a function that forwards requests to the Ollama server
+// makeProxyHandler creates a function that forwards requests to the Ollama server (used for non-intercepted paths)
 func makeProxyHandler() (func(*gin.Context), error) {
 	ollamaURL, err := url.Parse(ollamaUrlBase)
 	if err != nil {
@@ -196,7 +196,7 @@ func makeProxyHandler() (func(*gin.Context), error) {
 		}
 
 		wrappedWriter := c.Writer
-		ollamaTransparentRequestsTotal.WithLabelValues(c.Request.URL.Path, c.Request.Method).Inc()
+		ollamaTransparentRequestsTotal.WithLabelValues(c.Request.Method, c.Request.URL.Path).Inc()
 		proxy.ServeHTTP(wrappedWriter, c.Request)
 	}, nil
 }
