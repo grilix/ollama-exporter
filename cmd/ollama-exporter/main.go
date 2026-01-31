@@ -316,8 +316,8 @@ func forwardRequest(c *gin.Context, body []byte) (*http.Response, time.Time, err
 
 	resp, err := client.Do(req)
 	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": "Failed to reach Ollama"})
-		return nil, responseStart, fmt.Errorf("Error forwarding request to Ollama: %v", err)
+		c.JSON(http.StatusBadGateway, gin.H{"error": "Failed to reach Ollama server"})
+		return nil, responseStart, fmt.Errorf("Error forwarding request to Ollama server: %v", err)
 	}
 
 	for key, values := range resp.Header {
