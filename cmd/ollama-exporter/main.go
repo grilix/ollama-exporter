@@ -181,7 +181,7 @@ func makeProxyHandler() (func(*gin.Context), error) {
 		log.Printf("Error parsing Ollama URL[%s]: %v", ollamaUrlBase, err)
 		return func(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to parse Ollama URL"})
-		}, fmt.Errorf("Error parsing Ollama URL: %w", err)
+		}, fmt.Errorf("failed to parse Ollama URL: %w", err)
 	}
 
 	return func(c *gin.Context) {
@@ -296,8 +296,9 @@ func forwardRequest(c *gin.Context, body []byte) (*http.Response, time.Time, err
 
 	req, err := http.NewRequest(c.Request.Method, ollamaURL.String(), bytes.NewBuffer(body))
 	if err != nil {
+		log.Printf("Error creating request to Ollama server: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create request"})
-		return nil, time.Now(), fmt.Errorf("Error creating request: %v", err)
+		return nil, time.Now(), fmt.Errorf("failed to create request: %w", err)
 	}
 
 	for key, values := range c.Request.Header {
@@ -313,6 +314,7 @@ func forwardRequest(c *gin.Context, body []byte) (*http.Response, time.Time, err
 	client := &http.Client{Timeout: ollamaTimeout}
 
 	responseStart := time.Now()
+	log.Printf("Forwarding request to Ollama server: %s", ollamaUrlBase)
 
 	resp, err := client.Do(req)
 	if err != nil {
