@@ -23,7 +23,7 @@ import (
 )
 
 var ollamaUrlBase = fmt.Sprintf("http://%s", envValue("OLLAMA_HOST", "localhost:11434"))
-var ollamaTimeout = envDurationValue("OLLAMA_TIMEOUT", 50 * time.Minute)
+var ollamaTimeout = envDurationValue("OLLAMA_TIMEOUT", 50*time.Minute)
 
 var (
 	ollamaTransparentRequestsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
@@ -79,8 +79,8 @@ var (
 	}, []string{"model"})
 
 	ollamaTotalDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
-		Name: "ollama_total_duration_seconds",
-		Help: "Total duration of the request",
+		Name:    "ollama_total_duration_seconds",
+		Help:    "Total duration of the request",
 		Buckets: []float64{2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048},
 	}, []string{"model"})
 )
@@ -179,7 +179,7 @@ func makeProxyHandler() (func(*gin.Context), error) {
 	ollamaURL, err := url.Parse(ollamaUrlBase)
 	if err != nil {
 		log.Printf("Error parsing Ollama URL[%s]: %v", ollamaUrlBase, err)
-		return func (c *gin.Context) {
+		return func(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to parse Ollama URL"})
 		}, fmt.Errorf("Error parsing Ollama URL: %w", err)
 	}
@@ -540,7 +540,7 @@ func handleOllamaRegularResponse(c *gin.Context, body []byte, model string) erro
 
 	if resp.StatusCode != http.StatusOK {
 		ollamaResponsesTotal.WithLabelValues(model, "ollama", "non_stream", "failed").Inc()
-		return fmt.Errorf("response was not success: satus=%d", resp.StatusCode)
+		return fmt.Errorf("response was not success: status=%d", resp.StatusCode)
 	}
 
 	var responseData OllamaResponse
