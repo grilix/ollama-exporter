@@ -453,7 +453,7 @@ func handleCompletionsRegularResponse(c *gin.Context, body []byte, model string)
 	if resp.StatusCode == http.StatusOK {
 		var openAIResponse openai.ChatCompletion
 		if err := json.Unmarshal(responseBody, &openAIResponse); err == nil {
-			gatherOpenAIUsage(model, openAIResponse.Usage, "openai", "non_stream")
+			processOllamaResponse(model, "openai", "non_stream", resp, responseStart, nil)
 		}
 		ollamaResponsesTotal.WithLabelValues(model, "openai", "non_stream", "success").Inc()
 	} else {
@@ -500,9 +500,6 @@ func handleOllamaStreamingResponse(c *gin.Context, body []byte, model string) er
 		c.Writer.Flush()
 	}
 
-	responseDuration := float64(time.Since(responseStart)) / 1_000_000_000
-	ollamaResponseSeconds.WithLabelValues(model, "ollama", "stream").Observe(responseDuration)
-
 	if err := scanner.Err(); err != nil {
 		ollamaResponsesTotal.WithLabelValues(model, "ollama", "stream", "failed").Inc()
 		return fmt.Errorf("error reading stream: %w", err)
@@ -513,9 +510,25 @@ func handleOllamaStreamingResponse(c *gin.Context, body []byte, model string) er
 		return fmt.Errorf("final chunk not in response for model: %s", model)
 	}
 
-	ollamaResponsesTotal.WithLabelValues(model, "ollama", "stream", "success").Inc()
-	extractOllamaMetrics(finalChunkData, model)
+	processOllamaResponse(model, "ollama", "stream", resp, responseStart, finalChunkData)
 	return nil
+}
+
+// processOllamaResponse handles common response processing for Ollama requests
+func processOllamaResponse(model, api, requestType string, resp *http.Response, responseStart time.Time, response *OllamaResponse) {
+	responseDuration := float64(time.Since(responseStart)) / 1_000_000_000
+	ollamaResponseSeconds.WithLabelValues(model, api, requestType).Observe(responseDuration)
+
+	if resp.StatusCode != http.StatusOK {
+		ollamaResponsesTotal.WithLabelValues(model, api, requestType, "failed").Inc()
+		return
+	}
+
+	ollamaResponsesTotal.WithLabelValues(model, api, requestType, "success").Inc()
+
+	if response != nil {
+		extractOllamaMetrics(response, model)
+	}
 }
 
 // handleOllamaRegularResponse handles regular (non-streaming) responses
@@ -547,8 +560,7 @@ func handleOllamaRegularResponse(c *gin.Context, body []byte, model string) erro
 
 	var responseData OllamaResponse
 	if err := json.Unmarshal(responseBody, &responseData); err == nil {
-		extractOllamaMetrics(&responseData, model)
-		ollamaResponsesTotal.WithLabelValues(model, "ollama", "non_stream", "success").Inc()
+		processOllamaResponse(model, "ollama", "non_stream", resp, responseStart, &responseData)
 	}
 	return nil
 }
