@@ -22,10 +22,17 @@ import (
 	"github.com/openai/openai-go/v3"
 )
 
-var ollamaUrlBase = fmt.Sprintf("http://%s", envValue("OLLAMA_HOST", "localhost:11434"))
+var exporterVersion = "dev"
+var exporterSha = "unknown"
 var ollamaTimeout = envDurationValue("OLLAMA_TIMEOUT", 50*time.Minute)
+var ollamaUrlBase = fmt.Sprintf("http://%s", envValue("OLLAMA_HOST", "localhost:11434"))
 
 var (
+	exporterVersionGauge = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "ollama_exporter_version",
+		Help: "Exporter version",
+	}, []string{"version"})
+
 	ollamaTransparentRequestsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "ollama_transparent_requests_total",
 		Help: "Total requests passed through",
@@ -178,10 +185,7 @@ func verifyOllamaConnection() error {
 func makeProxyHandler() (func(*gin.Context), error) {
 	ollamaURL, err := url.Parse(ollamaUrlBase)
 	if err != nil {
-		log.Printf("Error parsing Ollama URL[%s]: %v", ollamaUrlBase, err)
-		return func(c *gin.Context) {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to parse Ollama URL"})
-		}, fmt.Errorf("failed to parse Ollama URL: %w", err)
+		return func(c *gin.Context) {}, fmt.Errorf("failed to parse Ollama URL: %w", err)
 	}
 
 	return func(c *gin.Context) {
@@ -569,9 +573,16 @@ func main() {
 	log.SetOutput(os.Stdout)
 	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds)
 
+	versionString := exporterVersion
+	if exporterVersion == "dev" || exporterVersion == "main" {
+		versionString = fmt.Sprintf("%s:%s", exporterVersion, exporterSha)
+	}
+	exporterVersionGauge.WithLabelValues(versionString).Set(1)
+
 	proxyHandler, err := makeProxyHandler()
 	if err != nil {
 		log.Printf("Error: Can't create proxyHandler: %v", err)
+		os.Exit(1)
 	}
 
 	if err := verifyOllamaConnection(); err != nil {

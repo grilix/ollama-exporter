@@ -1,5 +1,10 @@
 FROM golang:1.23-alpine AS builder
 
+ARG VERSION="dev"
+ARG COMMIT_SHA="unknown"
+ENV BUILD_VERSION=${VERSION}
+ENV BUILD_SHA=${COMMIT_SHA}
+
 WORKDIR /app
 
 COPY go.mod go.sum ./
@@ -9,6 +14,7 @@ COPY cmd/ cmd
 
 RUN CGO_ENABLED=0 GOOS=linux \
       go build -a -installsuffix cgo \
+      -ldflags "-X main.exporterVersion=${VERSION} -X main.exporterSha=${COMMIT_SHA}" \
       -o ollama-exporter \
       ./cmd/ollama-exporter
 

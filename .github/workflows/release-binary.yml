@@ -30,4 +30,5 @@ jobs:
           #goversion: "https://dl.google.com/go/go1.23.linux-amd64.tar.gz"
           project_path: "./cmd/ollama-exporter"
           binary_name: "ollama-exporter"
+          build_flags: '-trimpath -ldflags "-X main.exporterVersion=${{ github.ref_name }} -X main.exporterSha=${{ github.sha }}"'
           extra_files: LICENSE README.md
