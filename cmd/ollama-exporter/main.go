@@ -575,7 +575,11 @@ func main() {
 
 	versionString := exporterVersion
 	if exporterVersion == "dev" || exporterVersion == "main" {
-		versionString = fmt.Sprintf("%s:%s", exporterVersion, exporterSha)
+		shaPrefix := exporterSha
+		if len(shaPrefix) == 40 {
+			shaPrefix = shaPrefix[:7]
+		}
+		versionString = fmt.Sprintf("%s:%s", exporterVersion, shaPrefix)
 	}
 	exporterVersionGauge.WithLabelValues(versionString).Set(1)
 
