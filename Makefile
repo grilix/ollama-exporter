@@ -16,10 +16,10 @@ BINARY_UNIX=$(BINARY_NAME)_unix
 VERSION ?= dev
 SHA ?= unknown
 BUILD_TIME=$(shell date +%Y-%m-%dT%H:%M:%S%z)
-LDFLAGS=-ldflags "-X main.version=$(VERSION) -X main.sha=$(SHA) -X main.buildTime=$(BUILD_TIME)"
+LDFLAGS=-ldflags "-X ollama-exporter/cmd.version=$(VERSION) -X ollama-exporter/cmd.sha=$(SHA) -X ollama-exporter/cmd.buildTm=$(BUILD_TIME)"
 
 # Directories
-CMD_DIR=./cmd/ollama-exporter
+CMD_DIR=.
 INTERNAL_DIR=./internal
 PKG_DIR=./pkg
 TEST_DIR=./test
@@ -69,16 +69,13 @@ clean:
 
 # Test targets
 test:
-	$(GOTEST) -v ./...
-
-test-short:
-	$(GOTEST) -short -v ./...
+	$(GOTEST) ./...
 
 test-integration:
-	$(GOTEST) -v -tags=integration ./test/integration/...
+	$(GOTEST) -tags=integration ./test/integration/...
 
 test-unit:
-	$(GOTEST) -v ./internal/... ./pkg/...
+	$(GOTEST) ./internal/... ./pkg/...
 
 coverage:
 	$(GOTEST) -coverprofile=coverage.out ./...
@@ -101,15 +98,12 @@ deps:
 	$(GOMOD) download
 	$(GOMOD) tidy
 
-deps-update:
-	$(GOMOD) get -u ./...
-
 # Docker targets
 docker-build:
 	docker build -t $(DOCKER_IMAGE):$(DOCKER_TAG) .
 
 docker-run:
-	docker run --rm -p 8000:8000 -e OLLAMA_HOST=$(DOCKER_IMAGE):$(DOCKER_TAG)
+	docker run --rm -p 8000:8000 -e OLLAMA_HOST=$(OLLAMA_HOST) $(DOCKER_IMAGE):$(DOCKER_TAG)
 
 docker-push:
 	docker push $(DOCKER_IMAGE):$(DOCKER_TAG)

@@ -10,13 +10,20 @@ WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 
-COPY cmd/ cmd
+COPY --parents \
+  main.go \
+  internal \
+  cmd \
+  pkg \
+  .
+
+COPY internal/ internal
 
 RUN CGO_ENABLED=0 GOOS=linux \
       go build -a -installsuffix cgo \
       -ldflags "-X main.exporterVersion=${VERSION} -X main.exporterSha=${COMMIT_SHA}" \
       -o ollama-exporter \
-      ./cmd/ollama-exporter
+      .
 
 FROM alpine:latest
 
