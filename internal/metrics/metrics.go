@@ -10,6 +10,9 @@ type Metrics struct {
 	// Version information
 	ExporterVersionGauge *prometheus.GaugeVec
 
+	// Tool calls
+	OllamaToolCallsTotal		   *prometheus.CounterVec
+
 	// Request/Response counters
 	OllamaTransparentRequestsTotal *prometheus.CounterVec
 	OllamaRequestsTotal            *prometheus.CounterVec
@@ -35,6 +38,11 @@ func NewMetrics() *Metrics {
 			Name: "ollama_exporter_version",
 			Help: "Exporter version",
 		}, []string{"version"}),
+
+		OllamaToolCallsTotal: promauto.NewCounterVec(prometheus.CounterOpts{
+			Name: "ollama_tool_calls_total",
+			Help: "Total tool calls",
+		}, []string{"model", "api", "type", "tool_type", "tool_name"}),
 
 		OllamaTransparentRequestsTotal: promauto.NewCounterVec(prometheus.CounterOpts{
 			Name: "ollama_transparent_requests_total",

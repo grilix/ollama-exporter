@@ -118,6 +118,7 @@ func (h *OpenAIHandler) handleStreamingResponse(c *gin.Context, body []byte, mod
 			if isFinal, usage := isOpenAIUsageChunk(jsonData); isFinal {
 				finalUsage = usage
 			}
+			h.collector.RecordOpenAIToolsUsage(jsonData, model, "openai", "stream")
 			c.SSEvent("", []byte(jsonData))
 		}
 		return true

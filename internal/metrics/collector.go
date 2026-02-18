@@ -1,8 +1,25 @@
 package metrics
 
 import (
+	"strings"
+	"encoding/json"
+
 	"github.com/openai/openai-go/v3"
 )
+
+type OpenAIToolCallsChunk struct {
+	Choices []struct {
+		Delta struct {
+			ToolCalls []struct {
+				Type string `json:"type"`
+				Function *struct {
+					Name string `json:"name"`
+					Arguments string `json:"arguments"`
+				} `json:"function,omitempty"`
+			} `json:"tool_calls"`
+		} `json:"delta"`
+	} `json:"choices"`
+}
 
 // Collector handles metric collection logic
 type Collector struct {
@@ -14,6 +31,43 @@ func NewCollector(metrics *Metrics) *Collector {
 	return &Collector{
 		metrics: metrics,
 	}
+}
+
+func (c *Collector) RecordOpenAIToolsUsage(jsonData, model, api, requestType string) {
+	// data: {
+	//   "id":"chatcmpl-220","object":"chat.completion.chunk","created":1771304907,"model":"ministral-3:3b","system_fingerprint":"fp_ollama","choices":[
+	//     {"index":0,"delta":{
+	//       "role":"assistant","content":"","tool_calls":[
+	//         {"id":"call_7v0ou6qm","index":0,"type":"function","function":{
+	//           "name":"bash","arguments":"{\"command\":\"ls --color\",\"description\":\"Lists files in current directory\"}"
+	//         }}
+	//       ]
+	//     },"finish_reason":null}
+	//   ]
+	// }
+	// FIXME: create a type for this?
+	if !strings.Contains(jsonData, "\"tool_calls\"") {
+		return
+	}
+	var usage OpenAIToolCallsChunk
+	// FIXME: we need to actually check if this is what we expect
+	if err := json.Unmarshal([]byte(jsonData), &usage); err != nil {
+		return
+	}
+
+	for _, choice := range usage.Choices {
+		for _, call := range choice.Delta.ToolCalls {
+			switch call.Type {
+			case "function":
+				c.metrics.OllamaToolCallsTotal.WithLabelValues(model, api, requestType, call.Type, call.Function.Name).Inc()
+				break
+			default:
+				c.metrics.OllamaToolCallsTotal.WithLabelValues(model, api, requestType, call.Type, "(N/A)").Inc()
+			}
+		}
+	}
+
+	return
 }
 
 // ExtractOllamaMetrics extracts and records metrics from Ollama metrics data
