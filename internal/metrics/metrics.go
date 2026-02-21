@@ -11,7 +11,7 @@ type Metrics struct {
 	ExporterVersionGauge *prometheus.GaugeVec
 
 	// Tool calls
-	OllamaToolCallsTotal		   *prometheus.CounterVec
+	OllamaToolCallsTotal *prometheus.CounterVec
 
 	// Request/Response counters
 	OllamaTransparentRequestsTotal *prometheus.CounterVec
@@ -104,14 +104,35 @@ func NewMetrics() *Metrics {
 	}
 }
 
+type ModelMetrics struct { // TODO: rename, this groups [model, api, type]
+	Model       string
+	API         string
+	RequestType string
+}
+
+type ToolUsage struct {
+	ModelMetrics *ModelMetrics
+	Type         string
+	Name         string
+}
+
 // OllamaMetrics is a minimal representation of the data needed for metric collection.
 type OllamaMetrics struct {
+	ModelMetrics *ModelMetrics
+
 	TotalDuration      int64
 	LoadDuration       int64
 	PromptEvalDuration int64
 	PromptEvalCount    int64
 	EvalDuration       int64
 	EvalCount          int64
+}
+
+type OpenAIMetrics struct {
+	ModelMetrics *ModelMetrics
+
+	PromptTokens     int64 // processed, TODO?
+	CompletionTokens int64 // generated, TODO?
 }
 
 // SetVersion sets the exporter version metric

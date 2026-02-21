@@ -12,6 +12,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/packages/respjson"
 
 	"ollama-exporter/internal/metrics"
 	"ollama-exporter/internal/routes"
@@ -48,10 +49,15 @@ func (h *OpenAIHandler) CompletionsHandler(c *gin.Context) {
 		return
 	}
 
-	model := "unknown"
+	modelMetrics := &metrics.ModelMetrics{
+		Model:       "unknown",
+		API:         "openai",
+		RequestType: "non_stream",
+	}
+
 	if m, ok := requestData["model"]; ok {
 		if mStr, ok := m.(string); ok {
-			model = mStr
+			modelMetrics.Model = mStr
 		}
 	}
 
@@ -59,15 +65,18 @@ func (h *OpenAIHandler) CompletionsHandler(c *gin.Context) {
 	if stream, ok := requestData["stream"]; ok {
 		if streamBool, ok := stream.(bool); ok {
 			isStreaming = streamBool
+			if streamBool {
+				modelMetrics.RequestType = "stream"
+			}
 		}
 	}
 
+	h.collector.RecordRequest(modelMetrics)
+
 	if isStreaming {
-		h.collector.RecordRequest(model, "openai", "stream")
-		err = h.handleStreamingResponse(c, body, model)
+		err = h.handleStreamingResponse(c, body, modelMetrics)
 	} else {
-		h.collector.RecordRequest(model, "openai", "non_stream")
-		err = h.handleRegularResponse(c, body, model)
+		err = h.handleRegularResponse(c, body, modelMetrics)
 	}
 	if err != nil {
 		log.Printf("Error handling response: %v", err)
@@ -75,10 +84,10 @@ func (h *OpenAIHandler) CompletionsHandler(c *gin.Context) {
 }
 
 // handleStreamingResponse handles streaming responses for /v1/chat/completions
-func (h *OpenAIHandler) handleStreamingResponse(c *gin.Context, body []byte, model string) error {
+func (h *OpenAIHandler) handleStreamingResponse(c *gin.Context, body []byte, modelMetrics *metrics.ModelMetrics) error {
 	var requestBody map[string]interface{}
 	if err := json.Unmarshal(body, &requestBody); err != nil {
-		h.collector.RecordResponse(model, "openai", "stream", "failed")
+		h.collector.RecordResponse(modelMetrics, "failed")
 		return fmt.Errorf("failed to parse request: %w", err)
 	}
 	if streamOptions, ok := requestBody["stream_options"].(map[string]interface{}); ok {
@@ -90,19 +99,21 @@ func (h *OpenAIHandler) handleStreamingResponse(c *gin.Context, body []byte, mod
 
 	body, err := json.Marshal(requestBody)
 	if err != nil {
-		h.collector.RecordResponse(model, "openai", "stream", "failed")
+		h.collector.RecordResponse(modelMetrics, "failed")
 		return fmt.Errorf("failed to marshal request: %w", err)
 	}
 
 	resp, responseStart, err := h.forwarder.ForwardRequest(c, body)
 	if err != nil {
-		h.collector.RecordResponse(model, "openai", "stream", "failed")
+		h.collector.RecordResponse(modelMetrics, "failed")
 		return fmt.Errorf("failed to forward request: %w", err)
 	}
 
 	defer resp.Body.Close()
 
-	var finalUsage *openai.CompletionUsage
+	if resp.StatusCode != 200 {
+		log.Printf("Upstream error[%d]", resp.StatusCode)
+	}
 
 	scanner := bufio.NewScanner(resp.Body)
 	c.Stream(func(w io.Writer) bool {
@@ -115,37 +126,34 @@ func (h *OpenAIHandler) handleStreamingResponse(c *gin.Context, body []byte, mod
 		jsonData := strings.TrimPrefix(lineStr, "data:")
 
 		if len(jsonData) > 0 {
-			if isFinal, usage := isOpenAIUsageChunk(jsonData); isFinal {
-				finalUsage = usage
-			}
-			h.collector.RecordOpenAIToolsUsage(jsonData, model, "openai", "stream")
+			var chunkData openai.ChatCompletionChunk
 			c.SSEvent("", []byte(jsonData))
+
+			if err := json.Unmarshal([]byte(jsonData), &chunkData); err == nil {
+				extractChunkMetrics(modelMetrics, &chunkData, h.collector)
+			}
 		}
 		return true
 	})
 	resultError := scanner.Err()
 
 	responseDuration := float64(time.Since(responseStart)) / 1_000_000_000
-	h.collector.RecordResponseDuration(model, "openai", "stream", responseDuration)
-
-	if finalUsage != nil {
-		h.collector.GatherOpenAIUsage(model, *finalUsage, "openai", "stream")
-	}
+	h.collector.RecordResponseDuration(modelMetrics, responseDuration)
 
 	if resultError != nil {
-		h.collector.RecordResponse(model, "openai", "stream", "failed")
+		h.collector.RecordResponse(modelMetrics, "failed")
 		return fmt.Errorf("error reading response: %w", resultError)
 	}
 
-	h.collector.RecordResponse(model, "openai", "stream", "success")
+	h.collector.RecordResponse(modelMetrics, "success")
 	return nil
 }
 
 // handleRegularResponse handles regular (non-streaming) responses for /v1/chat/completions
-func (h *OpenAIHandler) handleRegularResponse(c *gin.Context, body []byte, model string) error {
+func (h *OpenAIHandler) handleRegularResponse(c *gin.Context, body []byte, modelMetrics *metrics.ModelMetrics) error {
 	resp, responseStart, err := h.forwarder.ForwardRequest(c, body)
 	if err != nil {
-		h.collector.RecordResponse(model, "openai", "non_stream", "failed")
+		h.collector.RecordResponse(modelMetrics, "failed")
 		return err
 	}
 
@@ -153,10 +161,10 @@ func (h *OpenAIHandler) handleRegularResponse(c *gin.Context, body []byte, model
 
 	responseBody, err := io.ReadAll(resp.Body)
 	responseDuration := float64(time.Since(responseStart)) / 1_000_000_000
-	h.collector.RecordResponseDuration(model, "openai", "non_stream", responseDuration)
+	h.collector.RecordResponseDuration(modelMetrics, responseDuration)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "Failed to read response"})
-		h.collector.RecordResponse(model, "openai", "non_stream", "failed")
+		h.collector.RecordResponse(modelMetrics, "failed")
 		return fmt.Errorf("Error reading Ollama response: %w", err)
 	}
 
@@ -165,30 +173,34 @@ func (h *OpenAIHandler) handleRegularResponse(c *gin.Context, body []byte, model
 	if resp.StatusCode == http.StatusOK {
 		var openAIResponse openai.ChatCompletion
 		if err := json.Unmarshal(responseBody, &openAIResponse); err == nil {
-			h.processResponse(model, "openai", "non_stream", resp, responseStart, nil)
+			h.processResponse(modelMetrics, resp, nil)
+
+			h.collector.GatherOpenAIUsage(metrics.OpenAIMetrics{
+				ModelMetrics:     modelMetrics,
+				PromptTokens:     openAIResponse.Usage.PromptTokens,
+				CompletionTokens: openAIResponse.Usage.CompletionTokens,
+			})
 		}
-		h.collector.RecordResponse(model, "openai", "non_stream", "success")
+		h.collector.RecordResponse(modelMetrics, "success")
 	} else {
-		h.collector.RecordResponse(model, "openai", "non_stream", "failed")
+		h.collector.RecordResponse(modelMetrics, "failed")
 	}
 
 	return nil
 }
 
 // processResponse handles common response processing for OpenAI requests
-func (h *OpenAIHandler) processResponse(model, api, requestType string, resp *http.Response, responseStart time.Time, response *OllamaResponse) {
-	responseDuration := float64(time.Since(responseStart)) / 1_000_000_000
-	h.collector.RecordResponseDuration(model, api, requestType, responseDuration)
-
+func (h *OpenAIHandler) processResponse(modelMetrics *metrics.ModelMetrics, resp *http.Response, response *OllamaResponse) {
 	if resp.StatusCode != http.StatusOK {
-		h.collector.RecordResponse(model, api, requestType, "failed")
+		h.collector.RecordResponse(modelMetrics, "failed")
 		return
 	}
 
-	h.collector.RecordResponse(model, api, requestType, "success")
+	h.collector.RecordResponse(modelMetrics, "success")
 
 	if response != nil {
 		metricData := &metrics.OllamaMetrics{
+			ModelMetrics:       modelMetrics,
 			TotalDuration:      response.TotalDuration,
 			LoadDuration:       response.LoadDuration,
 			PromptEvalDuration: response.PromptEvalDuration,
@@ -196,7 +208,7 @@ func (h *OpenAIHandler) processResponse(model, api, requestType string, resp *ht
 			EvalDuration:       response.EvalDuration,
 			EvalCount:          response.EvalCount,
 		}
-		h.collector.ExtractOllamaMetrics(metricData, model)
+		h.collector.ExtractOllamaMetrics(metricData)
 	}
 }
 
@@ -209,25 +221,27 @@ func (h *OpenAIHandler) Routes() []routes.Route {
 	}}
 }
 
-// isOpenAIUsageChunk checks if the JSON data contains usage information
-func isOpenAIUsageChunk(jsonData string) (bool, *openai.CompletionUsage) {
-	if !strings.Contains(jsonData, "\"usage\"") {
-		return false, nil
+func extractChunkMetrics(modelMetrics *metrics.ModelMetrics, chunkData *openai.ChatCompletionChunk, collector *metrics.Collector) {
+	if respjson.Field.Valid(chunkData.JSON.Usage) {
+		collector.GatherOpenAIUsage(metrics.OpenAIMetrics{
+			ModelMetrics:     modelMetrics,
+			PromptTokens:     chunkData.Usage.PromptTokens,
+			CompletionTokens: chunkData.Usage.CompletionTokens,
+		})
 	}
-
-	var chunkData map[string]interface{}
-	if err := json.Unmarshal([]byte(jsonData), &chunkData); err != nil {
-		return false, nil
-	}
-
-	if usageData, ok := chunkData["usage"]; ok {
-		if usageBytes, err := json.Marshal(usageData); err == nil {
-			var usage openai.CompletionUsage
-			if err := json.Unmarshal(usageBytes, &usage); err == nil {
-				return true, &usage
+	for _, choice := range chunkData.Choices {
+		for _, call := range choice.Delta.ToolCalls {
+			usage := metrics.ToolUsage{
+				ModelMetrics: modelMetrics,
+				Type:         call.Type,
 			}
+			switch call.Type {
+			case "function":
+				usage.Name = call.Function.Name
+			default:
+				usage.Name = "(N/A)" // TODO: should this be ""?
+			}
+			collector.RecordOpenAIToolsUsage(usage)
 		}
 	}
-
-	return false, nil
 }

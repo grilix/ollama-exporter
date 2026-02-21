@@ -51,10 +51,14 @@ func (h *OllamaHandler) ChatHandler(c *gin.Context) {
 		return
 	}
 
-	model := "unknown"
+	modelMetrics := &metrics.ModelMetrics{
+		Model:       "unknown",
+		API:         "ollama",
+		RequestType: "non_stream",
+	}
 	if m, ok := requestData["model"]; ok {
 		if mStr, ok := m.(string); ok {
-			model = mStr
+			modelMetrics.Model = mStr
 		}
 	}
 
@@ -62,15 +66,18 @@ func (h *OllamaHandler) ChatHandler(c *gin.Context) {
 	if stream, ok := requestData["stream"]; ok {
 		if streamBool, ok := stream.(bool); ok {
 			isStreaming = streamBool
+			if streamBool {
+				modelMetrics.RequestType = "stream"
+			}
 		}
 	}
 
+	h.collector.RecordRequest(modelMetrics)
+
 	if isStreaming {
-		h.collector.RecordRequest(model, "ollama", "stream")
-		err = h.handleStreamingResponse(c, body, model)
+		err = h.handleStreamingResponse(c, body, modelMetrics)
 	} else {
-		h.collector.RecordRequest(model, "ollama", "non_stream")
-		err = h.handleRegularResponse(c, body, model)
+		err = h.handleRegularResponse(c, body, modelMetrics)
 	}
 	if err != nil {
 		log.Printf("Error handling response: %v", err)
@@ -78,11 +85,11 @@ func (h *OllamaHandler) ChatHandler(c *gin.Context) {
 }
 
 // handleStreamingResponse handles streaming responses
-func (h *OllamaHandler) handleStreamingResponse(c *gin.Context, body []byte, model string) error {
+func (h *OllamaHandler) handleStreamingResponse(c *gin.Context, body []byte, modelMetrics *metrics.ModelMetrics) error {
 	resp, responseStart, err := h.forwarder.ForwardRequest(c, body)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "Failed to forward request"})
-		h.collector.RecordResponse(model, "ollama", "stream", "failed")
+		h.collector.RecordResponse(modelMetrics, "failed")
 		return err
 	}
 
@@ -114,26 +121,29 @@ func (h *OllamaHandler) handleStreamingResponse(c *gin.Context, body []byte, mod
 		c.Writer.Flush()
 	}
 
+	responseDuration := float64(time.Since(responseStart)) / 1_000_000_000
+	h.collector.RecordResponseDuration(modelMetrics, responseDuration)
+
 	if err := scanner.Err(); err != nil {
-		h.collector.RecordResponse(model, "ollama", "stream", "failed")
+		h.collector.RecordResponse(modelMetrics, "failed")
 		return fmt.Errorf("error reading stream: %w", err)
 	}
 
 	if finalChunkData == nil {
-		h.collector.RecordResponse(model, "ollama", "stream", "failed")
-		return fmt.Errorf("final chunk not in response for model: %s", model)
+		h.collector.RecordResponse(modelMetrics, "failed")
+		return fmt.Errorf("final chunk not in response for model: %s", modelMetrics.Model)
 	}
 
-	h.processResponse(model, "ollama", "stream", resp, responseStart, finalChunkData)
+	h.processResponse(modelMetrics, resp, finalChunkData)
 	return nil
 }
 
 // handleRegularResponse handles regular (non-streaming) responses
-func (h *OllamaHandler) handleRegularResponse(c *gin.Context, body []byte, model string) error {
+func (h *OllamaHandler) handleRegularResponse(c *gin.Context, body []byte, modelMetrics *metrics.ModelMetrics) error {
 	resp, responseStart, err := h.forwarder.ForwardRequest(c, body)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "Failed to forward request"})
-		h.collector.RecordResponse(model, "ollama", "non_stream", "failed")
+		h.collector.RecordResponse(modelMetrics, "failed")
 		return err
 	}
 
@@ -141,41 +151,39 @@ func (h *OllamaHandler) handleRegularResponse(c *gin.Context, body []byte, model
 
 	responseBody, err := io.ReadAll(resp.Body)
 	responseDuration := float64(time.Since(responseStart)) / 1_000_000_000
-	h.collector.RecordResponseDuration(model, "ollama", "non_stream", responseDuration)
+	h.collector.RecordResponseDuration(modelMetrics, responseDuration)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "Failed to read response"})
-		h.collector.RecordResponse(model, "ollama", "non_stream", "failed")
+		h.collector.RecordResponse(modelMetrics, "failed")
 		return fmt.Errorf("failed to read Ollama response: %v", err)
 	}
 
 	c.Writer.Write(responseBody)
 
 	if resp.StatusCode != http.StatusOK {
-		h.collector.RecordResponse(model, "ollama", "non_stream", "failed")
+		h.collector.RecordResponse(modelMetrics, "failed")
 		return fmt.Errorf("response was not success: status=%d", resp.StatusCode)
 	}
 
 	var responseData OllamaResponse
 	if err := json.Unmarshal(responseBody, &responseData); err == nil {
-		h.processResponse(model, "ollama", "non_stream", resp, responseStart, &responseData)
+		h.processResponse(modelMetrics, resp, &responseData)
 	}
 	return nil
 }
 
 // processResponse handles common response processing for Ollama requests
-func (h *OllamaHandler) processResponse(model, api, requestType string, resp *http.Response, responseStart time.Time, response *OllamaResponse) {
-	responseDuration := float64(time.Since(responseStart)) / 1_000_000_000
-	h.collector.RecordResponseDuration(model, api, requestType, responseDuration)
-
+func (h *OllamaHandler) processResponse(modelMetrics *metrics.ModelMetrics, resp *http.Response, response *OllamaResponse) {
 	if resp.StatusCode != http.StatusOK {
-		h.collector.RecordResponse(model, api, requestType, "failed")
+		h.collector.RecordResponse(modelMetrics, "failed")
 		return
 	}
 
-	h.collector.RecordResponse(model, api, requestType, "success")
+	h.collector.RecordResponse(modelMetrics, "success")
 
 	if response != nil {
 		metricData := &metrics.OllamaMetrics{
+			ModelMetrics:       modelMetrics,
 			TotalDuration:      response.TotalDuration,
 			LoadDuration:       response.LoadDuration,
 			PromptEvalDuration: response.PromptEvalDuration,
@@ -183,7 +191,7 @@ func (h *OllamaHandler) processResponse(model, api, requestType string, resp *ht
 			EvalDuration:       response.EvalDuration,
 			EvalCount:          response.EvalCount,
 		}
-		h.collector.ExtractOllamaMetrics(metricData, model)
+		h.collector.ExtractOllamaMetrics(metricData)
 	}
 }
 
