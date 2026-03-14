@@ -12,9 +12,9 @@ RUN go mod download
 
 COPY --parents \
   main.go \
+  go.mod go.sum \
   internal \
   cmd \
-  pkg \
   .
 
 COPY internal/ internal
